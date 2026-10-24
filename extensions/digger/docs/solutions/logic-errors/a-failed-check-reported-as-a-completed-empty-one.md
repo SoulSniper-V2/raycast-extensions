@@ -1,7 +1,7 @@
 ---
 title: A failed check reported as a completed one that found nothing
 date: 2026-09-02
-last_updated: 2026-09-02
+last_updated: 2026-09-30
 category: logic-errors
 module: useFetchSite
 problem_type: logic_error
@@ -11,7 +11,7 @@ symptoms:
   - '"No snapshots available" shown for an archive the previous request had just proven non-empty'
   - '"Not found" shown for robots.txt when the request 5xx''d, timed out, or was refused'
   - '"No records found" shown for DNS when the resolver died partway through the six queries'
-  - Every static gate stayed green for all four
+  - Every static gate stayed green for all six
 root_cause: logic_error
 resolution_type: code_fix
 severity: high
@@ -26,15 +26,16 @@ tags: [error-handling, fallback, fetch, abortsignal, dns, raycast]
 
 ## Problem
 
-Four independent auxiliary lookups each converted "the check failed" into "the check
+Six sites each converted "the check failed" into "the check
 succeeded and found nothing." The user cannot tell these apart from the UI, and they
 demand opposite responses: *absent* is an answer, *unavailable* is a reason to retry.
-Each instance passed `tsc`, `ray build`, `ray lint`, and code review.
+Every instance passed `tsc`, `ray build`, `ray lint`, and code review; four were found
+only by adversarial review, and two of those were introduced by the fix for another.
 
 ## Symptoms
 
 - A precise-count timeout produced `snapshotCount = pageCount * 5000` — the formula
-  meant for *large* archives — reporting a site with 8 snapshots as **5,000**, labelled
+  meant for *large* archives — reporting a site with 8 snapshots as **5,000**, labeled
   an estimate rather than a failure.
 - A non-2xx CDX response rendered "No snapshots available" for an archive whose page
   count had already proven non-empty.
@@ -44,10 +45,10 @@ Each instance passed `tsc`, `ray build`, `ray lint`, and code review.
 
 ## What Didn't Work
 
-- **Reading the code for a `catch` that swallows.** Only one of the four was a literal
+- **Reading the code for a `catch` that swallows.** Only one of the six was a literal
   `.catch(() => null)`. The others hid behind a plausible fallback value, an unchecked
   `Response`, and first-error bookkeeping — all of which *look* like handling.
-- **Trusting the gates.** All four shipped or nearly shipped green. Types cannot
+- **Trusting the gates.** All six shipped or nearly shipped green. Types cannot
   distinguish a real count from a fabricated one; both are `number`.
 - **Reasoning about the fallback in isolation.** `pageCount * 5000` was dismissed
   in-session as "degrading to an honest estimate." It is honest only on the branch it was
@@ -56,7 +57,7 @@ Each instance passed `tsc`, `ray build`, `ray lint`, and code review.
 
 ## Solution
 
-Four fixes, one rule: **on failure, report the failure — never a value.**
+Six fixes, one rule: **on failure, report the failure — never a value.**
 
 **1. A fallback calibrated for one branch is wrong on another.** There is no honest
 estimate for a small archive, so there is nothing to fall back *to*
@@ -85,16 +86,17 @@ if (!preciseResponse.ok) {
 Six DNS queries run in fixed order and each can fail benignly (`ENODATA` for a record
 type the host doesn't publish). Keeping "the first error" let a harmless A-record miss
 mask a resolver that died on the five after it
-(`/Users/messina/Developer/GitHub/chrismessina/raycast-digger/src/utils/dnsUtils.ts:36`):
+(`/Users/messina/Developer/GitHub/chrismessina/raycast-digger/src/utils/dnsUtils.ts:45`):
 
 ```ts
 const BENIGN = new Set(["ENODATA", "ENOTFOUND"]);
+const unchecked: DNSRecordKind[] = [];
 let resolverError: unknown;
-const note = (e: unknown) => {
+const note = (kind: DNSRecordKind, e: unknown) => {
   const code = (e as NodeJS.ErrnoException | undefined)?.code;
-  if (resolverError === undefined && (code === undefined || !BENIGN.has(code))) {
-    resolverError = e;
-  }
+  if (code !== undefined && BENIGN.has(code)) return;
+  unchecked.push(kind);
+  if (resolverError === undefined) resolverError = e;
 };
 ```
 
@@ -108,17 +110,30 @@ one round after the original fix landed.
 Filtering at capture also deleted the separate end-of-function code test — the correct
 version is smaller than both buggy ones.
 
-**4. Give the result three states, not two.** A boolean cannot hold the distinction, so
+**4. A lookup made of independent probes needs a verdict per probe.** DNS is six
+queries and they disagree: a host can answer for A and fail at the resolver for MX.
+One verdict for the whole lookup reported "No mail servers found" — a claim about the
+host from a query that never returned. `DNSData.unchecked` now carries the record types
+that failed, and each row reports its own outcome. Optional, so entries cached under the
+older shape still render as before.
+
+**5. The state has to reach the render path, not just exist.** When the whole DNS lookup
+failed, the section printed a "Couldn't check" summary label above six rows that still
+read "No IPv4 addresses found". A comment directly above them claimed it prevented
+exactly that. Section-level failure now marks every record type unchecked, so the rows
+carry it and the label is redundant.
+
+**6. Give the result three states, not two.** A boolean cannot hold the distinction, so
 the type has to carry it: `ResourceStatus` is `"found" | "absent" | "unavailable"`,
 classified by
-`/Users/messina/Developer/GitHub/chrismessina/raycast-digger/src/hooks/useFetchSite.ts:172`.
+`/Users/messina/Developer/GitHub/chrismessina/raycast-digger/src/hooks/useFetchSite.ts:173`.
 (session history: introduced by the robots/llms/sitemap fix earlier in this same
 release, whose witnessed test went 4/9 → 9/9 — the old boolean misclassified 500, 503,
 403, and timeout as "absent".)
 
 ## Why This Works
 
-Each fix removes a place where code *invented* information to fill a gap. The five
+Each fix removes a place where code *invented* information to fill a gap. The six
 disguises the same defect wears:
 
 | Disguise | Why it reads as correct |
@@ -128,6 +143,7 @@ disguises the same defect wears:
 | First-error bookkeeping | an error *is* recorded — the wrong one |
 | Two-state result type | no state exists to express "unknown" |
 | Allow-list of failure codes | the list is present and looks deliberate; it is just short |
+| One verdict for many probes | the aggregate succeeded, so the parts that did not are invisible |
 
 The two-state result type is the root of the rest: when a type cannot represent
 "unknown," every site handling it must invent something, and a plausible invention is
@@ -162,7 +178,7 @@ the same rule applied where a type change wasn't available.
   never established" — directly above six rows that went on asserting exactly that. The
   comment described the intent; nothing enforced it. When a comment states an invariant,
   find the line that makes it true or the comment is the only thing that is.
-- **A fix for this class can reintroduce it.** Two of the five instances here were
+- **A fix for this class can reintroduce it.** Two of the six instances here were
   introduced *while fixing another one*. When the remedy is "detect the failure case,"
   check whether the detector is exhaustive or merely plausible before calling it done.
 - **Static gates cannot see this class at all.** It needs a reviewer told to look for
@@ -174,5 +190,4 @@ the same rule applied where a type change wasn't available.
 - `/Users/messina/Developer/GitHub/chrismessina/raycast-digger/docs/solutions/logic-errors/abort-signal-conflates-self-cancel-and-supersede.md`
   — same module, same "green gates, wrong runtime behavior" shape, different cause
   (cancellation identity rather than error substitution).
-- Shipped in the Digger release opened as raycast/extensions#30742 (draft at time of
-  writing).
+- Shipped in raycast/extensions#30742, merged 2026-09-03.

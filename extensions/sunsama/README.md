@@ -49,6 +49,11 @@ Today's tasks in Sunsama's own order. From here you can start and stop timers,
 mark things complete, edit a task, set planned time, snooze to another day, move
 tasks around, open the linked item, manage subtasks, and delete.
 
+Turn on **Show task details** in the command's preferences to open a side pane
+with the selected task's notes, subtasks, channel, planned and tracked time,
+calendar slots, the linked item (Trello, Google Tasks, ...), and
+where a calendar event came from.
+
 Timers work on subtasks too. If a subtask timer is running — even one you started
 in the Sunsama web app — hitting Stop Timer on the parent task stops the right
 one.
@@ -58,6 +63,24 @@ one.
 Picks the channel new tasks default to. Sunsama has no "list all channels"
 endpoint, only search, so this list is search-driven — start typing and it
 narrows.
+
+## Ask Raycast AI
+
+The extension is also an AI Extension. Mention it in Raycast AI Chat with
+`@sunsama` and ask in plain words:
+
+- `@sunsama what's on my plate today?`
+- `@sunsama add a task to call the dentist tomorrow, 15 minutes`
+- `@sunsama mark 'Write release notes' as done`
+- `@sunsama start the timer on Write release notes`
+- `@sunsama push Write release notes to Monday`
+
+The AI can list a day's tasks and channels, add tasks (with notes, a channel,
+planned time, subtasks, or a pasted link), edit, complete, reschedule, and
+delete tasks, add subtasks, and start or stop timers. Editing, completing,
+rescheduling, or deleting a task asks you to confirm first, and deleting is
+marked as destructive. Adding tasks or subtasks and starting or stopping a
+timer run straight away.
 
 ## Time input
 
@@ -96,6 +119,13 @@ npm run lint     # eslint + prettier
 npm run build    # the build Raycast actually publishes
 ```
 
+The AI tools have evals in `package.json` under `ai.evals`. They run on
+Raycast's servers, so sign in once with `npx ray login`, then:
+
+```bash
+npx ray evals
+```
+
 The tests cover the pure logic — duration parsing, day math, and the HTML to
 Markdown conversion for notes. Sunsama sends task notes as HTML but takes
 Markdown back when you save them, so that conversion has to survive a round trip
@@ -110,6 +140,7 @@ src/
   view-today.tsx          View Today's Tasks command
   set-default-channel.tsx Set Default Channel command
   components/             Forms and lists pushed onto the navigation stack
+  tools/                  AI Extension tools (one file per tool)
   lib/
     mcp.ts                OAuth, MCP transport, tool and resource calls
     sunsama-client.ts     Tasks, subtasks, channels, timers
